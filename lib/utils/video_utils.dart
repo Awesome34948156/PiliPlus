@@ -10,6 +10,13 @@ abstract final class VideoUtils {
   static String? liveCdnUrl = Pref.liveCdnUrl;
   static bool disableAudioCDN = Pref.disableAudioCDN;
 
+  /// Host chosen by adaptive selection, or null to use [cdnService].
+  ///
+  /// Session-scoped on purpose: the automatic pick must never be written back
+  /// over the user's saved `Pref.defaultCDNService`. Owned by
+  /// `utils/cdn_adaptive.dart`.
+  static CDNService? adaptiveHost;
+
   static const _proxyTf = 'proxy-tf-all-ws.bilivideo.com';
 
   static final _mirrorRegex = RegExp(
@@ -24,8 +31,12 @@ abstract final class VideoUtils {
     Iterable<String> urls, {
     CDNService? defaultCDNService,
     bool isAudio = false,
+    bool adaptive = true,
   }) {
-    defaultCDNService ??= cdnService;
+    // An explicit host always wins: the settings speed test measures each
+    // candidate by passing one in per row, and would otherwise measure the
+    // adaptive host over and over.
+    defaultCDNService ??= (adaptive ? adaptiveHost : null) ?? cdnService;
 
     if (defaultCDNService == CDNService.baseUrl) {
       return urls.first;

@@ -53,6 +53,7 @@ import 'package:PiliPlus/plugin/pl_player/models/heart_beat_type.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
 import 'package:PiliPlus/utils/accounts.dart';
+import 'package:PiliPlus/utils/cdn_adaptive.dart';
 import 'package:PiliPlus/utils/connectivity_utils.dart';
 import 'package:PiliPlus/utils/extension/context_ext.dart';
 import 'package:PiliPlus/utils/extension/iterable_ext.dart';
@@ -79,7 +80,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:media_kit/media_kit.dart' hide Subtitle;
 
 class VideoDetailController extends GetxController
-    with GetTickerProviderStateMixin, BlockMixin {
+    with GetTickerProviderStateMixin, BlockMixin, WidgetsBindingObserver {
   /// 路由传参
   late final Map args;
   late String bvid;
@@ -392,6 +393,11 @@ class VideoDetailController extends GetxController
       vsync: this,
       initialIndex: Pref.defaultShowComment ? 1 : 0,
     );
+
+    WidgetsBinding.instance.addObserver(this);
+    _bufferingWorker = ever(plPlayerController.isBuffering, (_) {
+      _onBufferingChanged();
+    });
   }
 
   Future<void> getMediaList({
@@ -705,6 +711,154 @@ class VideoDetailController extends GetxController
     playerInit();
   }
 
+  // ---- adaptive CDN selection ---------------------------------------------
+  //
+  // Ported from the bili-accelerator userscript. What it can do here is
+  // narrower: libmpv fetches the media in native code, so playback throughput
+  // is unobservable and the only usable signal is "playback has stalled".
+  // Selection is therefore stall-triggered rather than throughput-triggered.
+
+  /// True once the current query resolved a dash source. The `durl`/`edl://`
+  /// fallback and file sources leave it false, which is what keeps a playlist
+  /// string from ever being rewritten as if it were a hostname.
+  bool _hasDashSource = false;
+
+  /// Deadline before which our own re-open's buffering must not count as a
+  /// stall. Without it a single stall would cascade through the whole pool in
+  /// seconds, because re-opening the player always buffers.
+  DateTime? _reopenGraceUntil;
+
+  /// Rotations spent on the current episode, capped at the pool size.
+  int _episodeRotations = 0;
+
+  Timer? _stallTimer;
+  bool _rotationInFlight = false;
+  bool _appVisible = true;
+  Worker? _bufferingWorker;
+
+  /// True when a stall is worth acting on. Every bail-out here is a state where
+  /// re-opening the player would be wrong, not merely unhelpful.
+  bool get _canRotate {
+    if (!Pref.autoCdn || isFileSource || isClosed) return false;
+    if (!_appVisible || _rotationInFlight) return false;
+    if (!_hasDashSource) return false;
+    if (_episodeRotations >= CdnAdaptive.effectivePool.length) return false;
+
+    // The same test the player's own error handler uses: a non-zero buffer
+    // means it has something to play and is not starved.
+    if (plPlayerController.buffered.value != 0) return false;
+
+    final player = plPlayerController.videoPlayerController;
+    if (player == null || !player.state.playing) return false;
+
+    final grace = _reopenGraceUntil;
+    return grace == null || DateTime.now().isAfter(grace);
+  }
+
+  void _onBufferingChanged() {
+    _stallTimer?.cancel();
+    _stallTimer = null;
+    if (!plPlayerController.isBuffering.value) {
+      // A rotation clears this flag itself; that is not the stall ending.
+      if (!_rotationInFlight) _episodeRotations = 0;
+      return;
+    }
+    _stallTimer = Timer(CdnAdaptive.stallGrace, _handleStall);
+  }
+
+  Future<void> _handleStall() async {
+    _stallTimer = null;
+    if (!_canRotate) return;
+
+    // The host actually in use — not just the adaptive one. With a manual pick,
+    // adaptiveHost is null while playback runs on cdnService, and rotation needs
+    // to know which host is failing or it can hand back the one already playing.
+    final inUse = VideoUtils.adaptiveHost ?? VideoUtils.cdnService;
+    // A host outside the pool (the untouched original URL) is nothing the cursor
+    // can step away from; start from the top instead.
+    final current = CdnAdaptive.effectivePool.contains(inUse) ? inUse : null;
+    final next = CdnAdaptive.rotate(current, stalling: inUse);
+    if (next == null || next == inUse) return;
+
+    VideoUtils.adaptiveHost = next;
+    _episodeRotations++;
+    await _rotateAndReopen();
+    if (isClosed) return;
+
+    if (_episodeRotations >= CdnAdaptive.effectivePool.length) {
+      SmartDialog.showToast('已切换所有 CDN 仍卡顿，停止自动切换');
+      return;
+    }
+    // libmpv reports buffering once per episode, so a stall that outlasts this
+    // rotation never announces itself again — re-check instead of waiting.
+    _stallTimer = Timer(CdnAdaptive.stallRetry, _handleStall);
+  }
+
+  /// Re-open the player on the current [VideoUtils.adaptiveHost].
+  ///
+  /// Modelled on [updatePlayer] but without the quality and decode work: only
+  /// the host changes. Video and audio are recomputed together so both land on
+  /// the same host and cannot drift apart.
+  Future<void> _rotateAndReopen() async {
+    if (_rotationInFlight) return;
+    _rotationInFlight = true;
+    try {
+      playedTime = plPlayerController.videoPlayerController?.state.position;
+      plPlayerController
+        ..isBuffering.value = false
+        ..buffered.value = 0;
+
+      videoUrl = VideoUtils.getCdnUrl(firstVideo.playUrls);
+
+      final List<AudioItem>? audioList = data.dash?.audio;
+      if (audioList != null && audioList.isNotEmpty) {
+        final firstAudio = audioList.firstWhere(
+          (i) => i.id == currentAudioQa?.code,
+          orElse: () => audioList.first,
+        );
+        audioUrl = VideoUtils.getCdnUrl(firstAudio.playUrls, isAudio: true);
+      }
+
+      // Set before opening: our own re-open buffers, and that buffering must
+      // not be mistaken for the stall we are trying to fix.
+      _reopenGraceUntil = DateTime.now().add(CdnAdaptive.stallRetry);
+      _autoPlay.value = true;
+      await playerInit();
+    } finally {
+      _rotationInFlight = false;
+    }
+  }
+
+  /// Fire a ranking round when the cache is cold or stale, then adopt the
+  /// winner only if the viewer is still at the very start.
+  ///
+  /// Deliberately unawaited and strictly after the first frame: a probe on the
+  /// startup path would add seconds to every cold open.
+  Future<void> _maybeProbe(List<String> sampleUrls) async {
+    final changed = await CdnAdaptive.ensureRanking(sampleUrls);
+    if (!changed || isClosed || !Pref.autoCdn) return;
+
+    final position = plPlayerController.videoPlayerController?.state.position;
+    // Past the opening seconds the viewer is watching; let the better ranking
+    // take effect on the next open instead of interrupting now.
+    if (position == null || position > const Duration(seconds: 15)) return;
+    await _rotateAndReopen();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appVisible = !const <AppLifecycleState>{
+      AppLifecycleState.paused,
+      AppLifecycleState.hidden,
+      AppLifecycleState.detached,
+    }.contains(state);
+    if (_appVisible) {
+      // The pause itself made the player buffer; give it the grace period again
+      // rather than acting on a stall the viewer never saw.
+      _reopenGraceUntil = DateTime.now().add(CdnAdaptive.stallGrace);
+    }
+  }
+
   Future<void>? _initPlayerIfNeeded(bool autoFullScreenFlag) {
     if (_autoPlay.value ||
         (plPlayerController.preInitPlayer && !plPlayerController.processing) &&
@@ -840,6 +994,13 @@ class VideoDetailController extends GetxController
 
   @pragma('vm:prefer-inline')
   Future<void> _queryVideoUrl(bool fromReset, bool autoFullScreenFlag) async {
+    // Decided before any URL is built below. libmpv fetches the media itself, so
+    // there is no later hook where a wrong host could be corrected — this is the
+    // only chance to get it right without re-opening the player.
+    VideoUtils.adaptiveHost = CdnAdaptive.hostToApply;
+    _hasDashSource = false;
+    _episodeRotations = 0;
+
     if (plPlayerController.enableSponsorBlock && isBlock && !fromReset) {
       querySponsorBlock(bvid: bvid, cid: cid.value);
     }
@@ -930,6 +1091,8 @@ class VideoDetailController extends GetxController
       }
 
       // if (kDebugMode) debugPrint("allVideosList:${allVideosList}");
+      // Past this point dash is non-null, so the rotation paths are safe.
+      _hasDashSource = true;
       final cacheVideoQa = plPlayerController.cacheVideoQa!;
       final targetVideoQa = data.findAvailableVideoQuality(cacheVideoQa);
       currentVideoQa.value = VideoQuality.fromCode(targetVideoQa);
@@ -985,6 +1148,9 @@ class VideoDetailController extends GetxController
         audioUrl = '';
       }
       await _initPlayerIfNeeded(autoFullScreenFlag);
+      if (Pref.autoCdn) {
+        unawaited(_maybeProbe(firstVideo.playUrls.toList()));
+      }
     } else {
       _autoPlay.value = false;
       videoState.value = false;
@@ -1259,6 +1425,11 @@ class VideoDetailController extends GetxController
       ..dispose();
     subtitles.clear();
     vttSubtitles.clear();
+    WidgetsBinding.instance.removeObserver(this);
+    _stallTimer?.cancel();
+    _stallTimer = null;
+    _bufferingWorker?.dispose();
+    _bufferingWorker = null;
     super.onClose();
   }
 

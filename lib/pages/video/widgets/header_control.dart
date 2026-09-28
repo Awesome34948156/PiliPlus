@@ -43,6 +43,7 @@ import 'package:PiliPlus/services/shutdown_timer_service.dart'
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/android/bindings.g.dart';
+import 'package:PiliPlus/utils/cdn_adaptive.dart';
 import 'package:PiliPlus/utils/connectivity_utils.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
@@ -527,6 +528,9 @@ class HeaderControlState extends State<HeaderControl>
                       );
                       if (result != null) {
                         VideoUtils.cdnService = result;
+                        // A hand-picked host outranks the automatic pick, and
+                        // must be cleared before the reload below reads it.
+                        CdnAdaptive.clearOverride();
                         setting.put(SettingBoxKey.CDNService, result.name);
                         SmartDialog.showToast('已设置为 ${result.desc}，正在重载视频');
                         videoDetailCtr.queryVideoUrl(fromReset: true);

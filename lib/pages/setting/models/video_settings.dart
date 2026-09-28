@@ -6,10 +6,12 @@ import 'package:PiliPlus/models/common/video/live_quality.dart';
 import 'package:PiliPlus/models/common/video/video_decode_type.dart';
 import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/pages/setting/models/model.dart';
+import 'package:PiliPlus/pages/setting/widgets/cdn_auto_dialog.dart';
 import 'package:PiliPlus/pages/setting/widgets/ordered_multi_select_dialog.dart';
 import 'package:PiliPlus/pages/setting/widgets/select_dialog.dart';
 import 'package:PiliPlus/plugin/pl_player/models/audio_output_type.dart';
 import 'package:PiliPlus/plugin/pl_player/models/hwdec_type.dart';
+import 'package:PiliPlus/utils/cdn_adaptive.dart';
 import 'package:PiliPlus/utils/filtering_text.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
@@ -74,6 +76,20 @@ List<SettingsModel> get videoSettings => [
     subtitle: '测速通过模拟加载视频实现，注意流量消耗，结果仅供参考',
     setKey: SettingBoxKey.cdnSpeedTest,
     defaultVal: true,
+  ),
+  const SwitchModel(
+    title: '自动选择最优 CDN',
+    subtitle: '播放时对候选 CDN 测速并自动使用最快的；播放卡顿时自动切换下一个。会增加流量消耗',
+    leading: Icon(Icons.bolt),
+    setKey: SettingBoxKey.autoCdn,
+    defaultVal: false,
+    onChanged: CdnAdaptive.setEnabled,
+  ),
+  NormalModel(
+    title: '当前 CDN 排名',
+    leading: const Icon(Icons.network_check),
+    getSubtitle: () => CdnAdaptive.summary,
+    onTap: _showCdnRankDialog,
   ),
   SwitchModel(
     title: '音频不跟随 CDN 设置',
@@ -186,9 +202,20 @@ Future<void> _showCDNDialog(BuildContext context, VoidCallback setState) async {
   );
   if (res != null) {
     VideoUtils.cdnService = res;
+    // The user's pick outranks the automatic one, and a probe still in flight
+    // must not override it when it lands.
+    CdnAdaptive.clearOverride();
     await GStorage.setting.put(SettingBoxKey.CDNService, res.name);
     setState();
   }
+}
+
+Future<void> _showCdnRankDialog(
+  BuildContext context,
+  VoidCallback setState,
+) async {
+  await showCdnRankDialog(context);
+  setState();
 }
 
 Future<void> _showLiveCDNDialog(

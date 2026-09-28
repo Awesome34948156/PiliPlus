@@ -77,7 +77,13 @@ abstract final class DownloadHttp {
           orElse: () => videosList.first,
         );
 
-        final videoUrl = VideoUtils.getCdnUrl(videoDash.playUrls);
+        // Downloads opt out of adaptive CDN selection: the URL is persisted in
+        // the download metadata and re-resolved on resume, so it must not depend
+        // on a session-scoped measurement.
+        final videoUrl = VideoUtils.getCdnUrl(
+          videoDash.playUrls,
+          adaptive: false,
+        );
 
         final Type2File videoFile = Type2File(
           id: videoDash.id,
@@ -114,6 +120,7 @@ abstract final class DownloadHttp {
           final audioUrl = VideoUtils.getCdnUrl(
             audioDash.playUrls,
             isAudio: true,
+            adaptive: false,
           );
           audioFileList = [
             Type2File(
@@ -149,7 +156,7 @@ abstract final class DownloadHttp {
             md5: '',
             metaUrl: '',
             order: first.order!,
-            url: VideoUtils.getCdnUrl(first.playUrls),
+            url: VideoUtils.getCdnUrl(first.playUrls, adaptive: false),
           ),
         ];
         final FormatItem? formatItem = response.supportFormats

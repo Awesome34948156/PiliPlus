@@ -281,6 +281,21 @@ abstract final class Pref {
     return CDNService.backupUrl;
   }
 
+  static bool get autoCdn =>
+      _setting.get(SettingBoxKey.autoCdn, defaultValue: false);
+
+  /// Measured CDN ranking. Derived data rather than a user preference, so it
+  /// lives in the local cache and is never synced or backed up.
+  static String? get cdnRanking => _localCache.get(LocalCacheKey.cdnRanking);
+
+  static set cdnRanking(String? ranking) {
+    if (ranking == null) {
+      _localCache.delete(LocalCacheKey.cdnRanking);
+    } else {
+      _localCache.put(LocalCacheKey.cdnRanking, ranking);
+    }
+  }
+
   static String get banWordForRecommend =>
       _setting.get(SettingBoxKey.banWordForRecommend, defaultValue: '');
 

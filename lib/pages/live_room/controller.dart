@@ -36,6 +36,7 @@ import 'package:PiliPlus/utils/duration_utils.dart';
 import 'package:PiliPlus/utils/extension/iterable_ext.dart';
 import 'package:PiliPlus/utils/extension/rx_ext.dart';
 import 'package:PiliPlus/utils/global_data.dart';
+import 'package:PiliPlus/utils/live_cdn_filter.dart';
 import 'package:PiliPlus/utils/num_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
@@ -44,7 +45,8 @@ import 'package:PiliPlus/utils/utils.dart';
 import 'package:PiliPlus/utils/video_utils.dart';
 import 'package:canvas_danmaku/canvas_danmaku.dart';
 import 'package:easy_debounce/easy_throttle.dart';
-import 'package:flutter/foundation.dart' show kDebugMode, kReleaseMode;
+import 'package:flutter/foundation.dart'
+    show kDebugMode, kReleaseMode, debugPrint;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
@@ -262,7 +264,8 @@ class LiveRoomController extends GetxController {
           streamIndex: streamIndex,
           formatIndex: formatIndex,
           codecIndex: codecIndex,
-          liveUrlIndex: liveUrlIndex,
+          // Re-run the filter unless the user picked the host themselves.
+          liveUrlIndex: liveUrlAuto ? null : liveUrlIndex,
         ),
         if (!isLoaded.value && Accounts.heartbeat.isLogin) _fetchBlockRules(),
       ]);
@@ -277,6 +280,11 @@ class LiveRoomController extends GetxController {
   int formatIndex = 0;
   int codecIndex = 0;
   int liveUrlIndex = 0;
+
+  /// Whether [liveUrlIndex] was chosen by [LiveCdnFilter] rather than by the
+  /// user tapping a host. Only an automatic choice is re-made on a re-parse —
+  /// a hand-picked host survives a reload, as it always has.
+  bool liveUrlAuto = true;
 
   void _initStreamIndex() {
     final pref = Pref.liveStream;
@@ -309,12 +317,11 @@ class LiveRoomController extends GetxController {
     int streamIndex = 0,
     int formatIndex = 0,
     int codecIndex = 0,
-    int liveUrlIndex = 0,
+    int? liveUrlIndex,
   }) {
     this.streamIndex = streamIndex;
     this.formatIndex = formatIndex;
     this.codecIndex = codecIndex;
-    this.liveUrlIndex = liveUrlIndex;
 
     final CodecItem item = stream
         .getOrFirst(streamIndex)
@@ -322,6 +329,20 @@ class LiveRoomController extends GetxController {
         .getOrFirst(formatIndex)
         .codec
         .getOrFirst(codecIndex);
+
+    // A null index means "you decide" — the initial load and every internal
+    // re-parse pass null. The host picker always passes a real index, which is
+    // exactly what marks the choice as the user's and stops the filter
+    // overriding it later.
+    final int hostIndex = liveUrlIndex ?? LiveCdnFilter.autoIndex(item.urlInfo);
+    liveUrlAuto = liveUrlIndex == null;
+    this.liveUrlIndex = hostIndex;
+    if (kDebugMode && hostIndex != 0) {
+      debugPrint(
+        '[live-cdn] host 0 is PCDN, using $hostIndex '
+        '(${item.urlInfo.getOrFirst(hostIndex).host})',
+      );
+    }
     // 以服务端返回的码率为准
     currentQn = item.currentQn;
     acceptQnList = item.acceptQn.map((e) {
@@ -332,7 +353,7 @@ class LiveRoomController extends GetxController {
     }).toList();
     currentQnDesc.value =
         LiveQuality.fromCode(currentQn)?.desc ?? currentQn.toString();
-    videoUrl = VideoUtils.getLiveCdnUrl(item, index: liveUrlIndex);
+    videoUrl = VideoUtils.getLiveCdnUrl(item, index: hostIndex);
     return playerInit()?.whenComplete(_startSizeSub);
   }
 

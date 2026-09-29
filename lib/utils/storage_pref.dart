@@ -284,6 +284,15 @@ abstract final class Pref {
   static bool get autoCdn =>
       _setting.get(SettingBoxKey.autoCdn, defaultValue: false);
 
+  /// Skip PCDN/P2P nodes when picking the host a live stream starts on.
+  ///
+  /// On by default: the host list is left intact and every entry still shows in
+  /// the player's menu, so this only changes which one is used first. A viewer
+  /// who gets better speed from a PCDN node can override it per stream from that
+  /// menu, or switch it off here.
+  static bool get liveFilterPcdn =>
+      _setting.get(SettingBoxKey.liveFilterPcdn, defaultValue: true);
+
   /// Measured CDN ranking. Derived data rather than a user preference, so it
   /// lives in the local cache and is never synced or backed up.
   static String? get cdnRanking => _localCache.get(LocalCacheKey.cdnRanking);

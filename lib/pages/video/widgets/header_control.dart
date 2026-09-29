@@ -38,6 +38,7 @@ import 'package:PiliPlus/pages/video/widgets/header_mixin.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
+import 'package:PiliPlus/plugin/pl_player/view/net_speed_dialog.dart';
 import 'package:PiliPlus/services/shutdown_timer_service.dart'
     show shutdownTimerService, ShutdownPanel;
 import 'package:PiliPlus/utils/accounts.dart';
@@ -785,6 +786,17 @@ class HeaderControlState extends State<HeaderControl>
                     title: const Text('播放信息', style: titleStyle),
                     leading: const Icon(Icons.info_outline, size: 20),
                     onTap: () => showPlayerInfo(context, player: player),
+                  ),
+                // Reads a number out of mpv; changes nothing about playback.
+                if (plPlayerController.videoPlayerController != null)
+                  ListTile(
+                    dense: true,
+                    title: const Text('实时网速', style: titleStyle),
+                    leading: const Icon(Icons.network_check, size: 20),
+                    onTap: () => showNetSpeedDialog(
+                      context,
+                      controller: plPlayerController,
+                    ),
                   ),
                 ListTile(
                   dense: true,

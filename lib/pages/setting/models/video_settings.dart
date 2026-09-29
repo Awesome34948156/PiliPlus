@@ -71,6 +71,13 @@ List<SettingsModel> get videoSettings => [
     onTap: _showLiveCDNDialog,
   ),
   const SwitchModel(
+    title: '过滤直播 PCDN 节点',
+    leading: Icon(MdiIcons.cloudOffOutline),
+    subtitle: '直播默认使用服务端返回的第一个节点，若判定为 PCDN 节点则改用下一个；节点列表仍完整保留，可在播放器菜单中手动选择',
+    setKey: SettingBoxKey.liveFilterPcdn,
+    defaultVal: true,
+  ),
+  const SwitchModel(
     title: 'CDN 测速',
     leading: Icon(Icons.speed),
     subtitle: '测速通过模拟加载视频实现，注意流量消耗，结果仅供参考',

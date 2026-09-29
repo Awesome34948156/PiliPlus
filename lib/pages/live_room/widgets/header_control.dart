@@ -10,6 +10,7 @@ import 'package:PiliPlus/pages/setting/models/play_settings.dart'
     show showPlayerVolumeDialog;
 import 'package:PiliPlus/pages/video/widgets/header_control.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
+import 'package:PiliPlus/plugin/pl_player/view/net_speed_dialog.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/common_btn.dart';
 import 'package:PiliPlus/services/shutdown_timer_service.dart'
     show shutdownTimerService;
@@ -17,6 +18,7 @@ import 'package:PiliPlus/utils/android/bindings.g.dart';
 import 'package:PiliPlus/utils/extension/context_ext.dart';
 import 'package:PiliPlus/utils/extension/size_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
+import 'package:PiliPlus/utils/live_cdn_filter.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
@@ -271,6 +273,21 @@ class _LiveHeaderControlState extends State<LiveHeaderControl>
                       player: player,
                     ),
                   ),
+                  // Reads a number out of mpv; changes nothing about playback.
+                  PopupMenuItem(
+                    height: 35,
+                    child: const Row(
+                      spacing: 8,
+                      children: [
+                        Icon(Icons.network_check, size: 17),
+                        Text('实时网速', style: TextStyle(fontSize: 14)),
+                      ],
+                    ),
+                    onTap: () => showNetSpeedDialog(
+                      context,
+                      controller: plPlayerController,
+                    ),
+                  ),
                   if (PlatformUtils.isMobile)
                     PopupMenuItem(
                       height: 35,
@@ -400,10 +417,20 @@ class _LiveHeaderControlState extends State<LiveHeaderControl>
                                   final isCurrUrl =
                                       isCurrCodec &&
                                       ui == controller.liveUrlIndex;
+                                  // Marked rather than hidden: this node may
+                                  // still be the fastest one for some viewers,
+                                  // so it stays selectable — the label just
+                                  // explains why the default passed it over.
+                                  final isSlow = LiveCdnFilter.isSlowLiveHost(
+                                    url.host,
+                                    extra: url.extra,
+                                  );
                                   return ListTile(
                                     dense: true,
                                     title: Text(
-                                      '${url.host}...',
+                                      isSlow
+                                          ? '${url.host} (PCDN)'
+                                          : '${url.host}...',
                                       style: isCurrUrl
                                           ? const TextStyle(fontSize: 14)
                                           : TextStyle(

@@ -734,30 +734,53 @@ class VideoDetailController extends GetxController
   Timer? _stallTimer;
   bool _rotationInFlight = false;
   bool _appVisible = true;
+
+  /// True while this page is the one on screen.
+  ///
+  /// Pushing a video on top of this one pauses the shared player but does not
+  /// close this controller, so `isClosed` cannot stand in for it — a covered
+  /// page keeps its `isBuffering` worker pointed at the shared player and would
+  /// otherwise act on the *new* video's buffering. See [CdnAdaptive.canAct].
+  bool _pageActive = true;
+
   Worker? _bufferingWorker;
 
+  /// Called by the page from `didPushNext` / `didPopNext`.
+  void setPageActive(bool value) {
+    _pageActive = value;
+    if (!value) {
+      // A covered page has nothing to recover: stop the countdown that was
+      // armed by whatever the player was doing on its way out.
+      _stallTimer?.cancel();
+      _stallTimer = null;
+    }
+  }
+
   /// True when a stall is worth acting on. Every bail-out here is a state where
-  /// re-opening the player would be wrong, not merely unhelpful.
+  /// re-opening the player would be wrong, not merely unhelpful. The
+  /// conjunction itself lives in [CdnAdaptive.canAct] so it can be tested.
   bool get _canRotate {
-    if (!Pref.autoCdn || isFileSource || isClosed) return false;
-    if (!_appVisible || _rotationInFlight) return false;
-    if (!_hasDashSource) return false;
-    if (_episodeRotations >= CdnAdaptive.effectivePool.length) return false;
-
-    // The same test the player's own error handler uses: a non-zero buffer
-    // means it has something to play and is not starved.
-    if (plPlayerController.buffered.value != 0) return false;
-
     final player = plPlayerController.videoPlayerController;
-    if (player == null || !player.state.playing) return false;
-
     final grace = _reopenGraceUntil;
-    return grace == null || DateTime.now().isAfter(grace);
+    return CdnAdaptive.canAct(
+      autoCdn: Pref.autoCdn,
+      fileSource: isFileSource,
+      closed: isClosed,
+      pageActive: _pageActive,
+      appVisible: _appVisible,
+      rotationInFlight: _rotationInFlight,
+      dashSource: _hasDashSource,
+      budgetLeft: _episodeRotations < CdnAdaptive.effectivePool.length,
+      bufferedSeconds: plPlayerController.buffered.value,
+      playing: player != null && player.state.playing,
+      withinGrace: grace != null && !DateTime.now().isAfter(grace),
+    );
   }
 
   void _onBufferingChanged() {
     _stallTimer?.cancel();
     _stallTimer = null;
+    if (!_pageActive) return;
     if (!plPlayerController.isBuffering.value) {
       // A rotation clears this flag itself; that is not the stall ending.
       if (!_rotationInFlight) _episodeRotations = 0;
@@ -800,6 +823,9 @@ class VideoDetailController extends GetxController
   /// the host changes. Video and audio are recomputed together so both land on
   /// the same host and cannot drift apart.
   Future<void> _rotateAndReopen() async {
+    // Both callers check this already; repeating it here keeps the choke point
+    // self-guarding, so a future caller cannot re-open a covered page's URL.
+    if (!_pageActive) return;
     if (_rotationInFlight) return;
     _rotationInFlight = true;
     try {
@@ -836,7 +862,7 @@ class VideoDetailController extends GetxController
   /// startup path would add seconds to every cold open.
   Future<void> _maybeProbe(List<String> sampleUrls) async {
     final changed = await CdnAdaptive.ensureRanking(sampleUrls);
-    if (!changed || isClosed || !Pref.autoCdn) return;
+    if (!changed || isClosed || !_pageActive || !Pref.autoCdn) return;
 
     final position = plPlayerController.videoPlayerController?.state.position;
     // Past the opening seconds the viewer is watching; let the better ranking
@@ -876,6 +902,14 @@ class VideoDetailController extends GetxController
     bool? autoplay,
     bool autoFullScreenFlag = false,
   }) async {
+    // Every automatic route into the shared player funnels through here, so this
+    // is the one place that must refuse a covered page. A `queryVideoUrl` still
+    // in flight when the page is pushed over resolves afterwards and would
+    // otherwise re-open this page's URL on a player now showing another video —
+    // and re-install this page's listeners underneath it. The user-driven
+    // callers (didPopNext, handlePlay, the quality menu) all run while active.
+    if (!_pageActive) return;
+
     Duration? seek = defaultST ?? playedTime;
     if (seek == .zero) seek = null;
     seek ??= getFirstSegment();
@@ -914,7 +948,9 @@ class VideoDetailController extends GetxController
       autoFullScreenFlag: autoFullScreenFlag,
     );
 
-    if (isClosed) return;
+    // The page can go under while `setDataSource` is awaiting; skip the
+    // listeners rather than point them at another video's player.
+    if (isClosed || !_pageActive) return;
 
     if (!isFileSource) {
       if (plPlayerController.enableBlock) {

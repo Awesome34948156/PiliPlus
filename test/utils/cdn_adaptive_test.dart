@@ -60,7 +60,12 @@ void main() {
   group('rankHosts', () {
     test('reachable hosts come first, then by measured speed', () {
       const a = CdnSample(host: CDNService.ali, ok: true, mbps: 10, ttfbMs: 90);
-      const b = CdnSample(host: CDNService.cos, ok: true, mbps: 30, ttfbMs: 400);
+      const b = CdnSample(
+        host: CDNService.cos,
+        ok: true,
+        mbps: 30,
+        ttfbMs: 400,
+      );
       const c = CdnSample(host: CDNService.hw, ok: true, mbps: 10, ttfbMs: 20);
       const dead = CdnSample(host: CDNService.tf_tx, ok: false);
 
@@ -74,8 +79,18 @@ void main() {
 
     test('latency only breaks a throughput tie', () {
       // Same bytes, same window: the only difference is which answered first.
-      const quick = CdnSample(host: CDNService.ali, ok: true, mbps: 10, ttfbMs: 20);
-      const slow = CdnSample(host: CDNService.cos, ok: true, mbps: 10, ttfbMs: 200);
+      const quick = CdnSample(
+        host: CDNService.ali,
+        ok: true,
+        mbps: 10,
+        ttfbMs: 20,
+      );
+      const slow = CdnSample(
+        host: CDNService.cos,
+        ok: true,
+        mbps: 10,
+        ttfbMs: 200,
+      );
       expect(CdnAdaptive.rankHosts(<CdnSample>[slow, quick]), <CDNService>[
         CDNService.ali,
         CDNService.cos,
@@ -89,7 +104,12 @@ void main() {
         mbps: 999,
         ttfbMs: 1,
       );
-      const ok = CdnSample(host: CDNService.ali, ok: true, mbps: 0.1, ttfbMs: 900);
+      const ok = CdnSample(
+        host: CDNService.ali,
+        ok: true,
+        mbps: 0.1,
+        ttfbMs: 900,
+      );
       expect(CdnAdaptive.rankHosts(<CdnSample>[failed, ok]), <CDNService>[
         CDNService.ali,
         CDNService.tf_tx,
@@ -305,7 +325,8 @@ void main() {
     test('an entry older than the ttl is discarded', () {
       Pref.cdnRanking = jsonEncode(<String, Object?>{
         'ranking': <String>['cosov', 'ali'],
-        'at': DateTime.now().millisecondsSinceEpoch -
+        'at':
+            DateTime.now().millisecondsSinceEpoch -
             CdnAdaptive.ttl.inMilliseconds -
             1000,
         'wifi': true,
@@ -363,13 +384,19 @@ void main() {
 
     test('is the top-ranked host while the feature is on', () async {
       await GStorage.setting.put(SettingBoxKey.autoCdn, true);
-      CdnAdaptive.ranking = const <CDNService>[CDNService.cosov, CDNService.ali];
+      CdnAdaptive.ranking = const <CDNService>[
+        CDNService.cosov,
+        CDNService.ali,
+      ];
       expect(CdnAdaptive.hostToApply, CDNService.cosov);
     });
 
     test('is withheld after a host is picked by hand', () async {
       await GStorage.setting.put(SettingBoxKey.autoCdn, true);
-      CdnAdaptive.ranking = const <CDNService>[CDNService.cosov, CDNService.ali];
+      CdnAdaptive.ranking = const <CDNService>[
+        CDNService.cosov,
+        CDNService.ali,
+      ];
 
       CdnAdaptive.clearOverride();
       expect(CdnAdaptive.manualOverride, isTrue);
@@ -417,11 +444,90 @@ void main() {
     });
 
     test('narrows to the ranking once there is one', () {
-      CdnAdaptive.ranking = const <CDNService>[CDNService.cosov, CDNService.ali];
+      CdnAdaptive.ranking = const <CDNService>[
+        CDNService.cosov,
+        CDNService.ali,
+      ];
       expect(CdnAdaptive.effectivePool, <CDNService>[
         CDNService.cosov,
         CDNService.ali,
       ]);
+    });
+  });
+
+  group('canAct', () {
+    /// Every input in the state where nothing stops the adaptive path.
+    bool canAct({
+      bool autoCdn = true,
+      bool fileSource = false,
+      bool closed = false,
+      bool pageActive = true,
+      bool appVisible = true,
+      bool rotationInFlight = false,
+      bool dashSource = true,
+      bool budgetLeft = true,
+      int bufferedSeconds = 0,
+      bool playing = true,
+      bool withinGrace = false,
+    }) => CdnAdaptive.canAct(
+      autoCdn: autoCdn,
+      fileSource: fileSource,
+      closed: closed,
+      pageActive: pageActive,
+      appVisible: appVisible,
+      rotationInFlight: rotationInFlight,
+      dashSource: dashSource,
+      budgetLeft: budgetLeft,
+      bufferedSeconds: bufferedSeconds,
+      playing: playing,
+      withinGrace: withinGrace,
+    );
+
+    test('a fully permissive state acts', () {
+      expect(canAct(), isTrue);
+    });
+
+    test('a covered page is refused however inviting everything else is', () {
+      // The regression. The video underneath is neither closed nor invisible to
+      // the app, and the shared player is mid-load for the page on top — so
+      // `bufferedSeconds` is 0 and `playing` is true in the new video's name.
+      // `pageActive` is the only input that tells the two pages apart.
+      expect(canAct(pageActive: false), isFalse);
+    });
+
+    test('a covered page is refused in the exact stall shape', () {
+      // What the covered page looks like when its timer fires while the page
+      // above it is still loading.
+      expect(
+        canAct(pageActive: false, bufferedSeconds: 0, playing: true),
+        isFalse,
+      );
+      // The identical state one page up is a genuine stall, and still acted on.
+      expect(
+        canAct(pageActive: true, bufferedSeconds: 0, playing: true),
+        isTrue,
+      );
+    });
+
+    test('each bail-out on its own is enough', () {
+      expect(canAct(autoCdn: false), isFalse, reason: 'auto-CDN off');
+      expect(canAct(fileSource: true), isFalse, reason: 'file source');
+      expect(canAct(closed: true), isFalse, reason: 'controller closed');
+      expect(canAct(appVisible: false), isFalse, reason: 'app backgrounded');
+      expect(
+        canAct(rotationInFlight: true),
+        isFalse,
+        reason: 'already rotating',
+      );
+      expect(canAct(dashSource: false), isFalse, reason: 'no dash source');
+      expect(canAct(budgetLeft: false), isFalse, reason: 'pool exhausted');
+      expect(
+        canAct(bufferedSeconds: 1),
+        isFalse,
+        reason: 'buffer is not empty',
+      );
+      expect(canAct(playing: false), isFalse, reason: 'not playing');
+      expect(canAct(withinGrace: true), isFalse, reason: 'inside reopen grace');
     });
   });
 }

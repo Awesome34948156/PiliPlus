@@ -145,6 +145,43 @@ abstract final class CdnAdaptive {
 
   // ---- pure logic (unit-tested, no IO) ------------------------------------
 
+  /// Whether the adaptive path may touch the player at all right now.
+  ///
+  /// Written as a plain conjunction so every bail-out is testable without a
+  /// player, a route or a clock. The one that is easy to leave out is
+  /// [pageActive]: a covered page is not a closed page, so `isClosed` cannot
+  /// stand in for it. Tapping a related video pushes a second video page on top
+  /// of the first and the first stays alive — same controller, and the same
+  /// singleton player underneath. Without this check the covered page watches
+  /// the *new* video buffering (`bufferedSeconds` is 0 because that video is
+  /// still loading, and `playing` is the new video's state), concludes the
+  /// stream is stalling, and re-opens **its own** URL over the video the viewer
+  /// is actually watching.
+  static bool canAct({
+    required bool autoCdn,
+    required bool fileSource,
+    required bool closed,
+    required bool pageActive,
+    required bool appVisible,
+    required bool rotationInFlight,
+    required bool dashSource,
+    required bool budgetLeft,
+    required int bufferedSeconds,
+    required bool playing,
+    required bool withinGrace,
+  }) =>
+      autoCdn &&
+      !fileSource &&
+      !closed &&
+      pageActive &&
+      appVisible &&
+      !rotationInFlight &&
+      dashSource &&
+      budgetLeft &&
+      bufferedSeconds == 0 &&
+      playing &&
+      !withinGrace;
+
   /// Bytes over a duration as megabits per second.
   static double throughputMbps(int bytes, int durationMs) {
     if (bytes <= 0 || durationMs <= 0) {
@@ -353,7 +390,9 @@ abstract final class CdnAdaptive {
     final generation = _generation;
 
     final samples = await probeAll(sampleUrls);
-    final reachable = samples.where((CdnSample s) => s.ok).toList(growable: false);
+    final reachable = samples
+        .where((CdnSample s) => s.ok)
+        .toList(growable: false);
     final ranked = rankHosts(reachable);
     if (ranked.isEmpty) {
       return false;

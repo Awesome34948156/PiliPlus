@@ -379,6 +379,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
 
     videoDetailController
       ..videoState.value = false
+      ..setPageActive(false)
       ..cancelBlockListener()
       ..playerStatus = plPlayerController?.playerStatus
       ..brightness = plPlayerController?.brightness.value;
@@ -401,6 +402,8 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     }
 
     isShowing = true;
+
+    videoDetailController.setPageActive(true);
 
     addObserverMobile(this);
 

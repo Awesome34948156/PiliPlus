@@ -72,9 +72,13 @@ abstract final class DownloadHttp {
             .toList();
 
         /// 取出符合当前解码格式的videoItem
-        final videoDash = videosList.firstWhere(
-          (e) => currentDecodeFormats.codes.any(e.codecs!.startsWith),
-          orElse: () => videosList.first,
+        /// Same routine the player uses, so a download grabs the rendition
+        /// playback would use instead of `videosList.first`, which can be a
+        /// codec the device cannot decode.
+        final (videoDash, _) = VideoUtils.selectVideoRendition(
+          videosList,
+          currentDecodeFormats,
+          Pref.preferCodecs,
         );
 
         // Downloads opt out of adaptive CDN selection: the URL is persisted in

@@ -1,5 +1,6 @@
 import 'package:PiliPlus/models/common/video/cdn_type.dart';
 import 'package:PiliPlus/models/common/video/video_decode_type.dart';
+import 'package:PiliPlus/models/video/play/url.dart';
 import 'package:PiliPlus/models_new/live/live_room_play_info/codec.dart';
 import 'package:PiliPlus/utils/extension/iterable_ext.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
@@ -128,5 +129,58 @@ abstract final class VideoUtils {
       }
     }
     return VideoDecodeFormatType.fromString(codecs.first);
+  }
+
+  /// Picks the video rendition to play for one quality, and reports the decode
+  /// format that actually belongs to it.
+  ///
+  /// [items] must already be filtered to the target quality. [seed] is the
+  /// format advertised for that quality by `support_formats`; it is a hint
+  /// only, and is frequently absent from [items] — the advertised list and the
+  /// returned `dash.video` renditions come from different places, the list is
+  /// silently substituted with the top quality's when the target quality is
+  /// not in it, and `_supplementVideoQualities` merges in a second response.
+  ///
+  /// This is the single source of truth for rendition selection: the first
+  /// open and every reload (quality change, CDN rotation) must agree. When
+  /// they diverge, the first open can land on a rendition the device cannot
+  /// decode — audio plays while the video stream is dropped, until some later
+  /// reload happens to pick a good one. Falling back to `items.first` is the
+  /// bug this exists to prevent.
+  static (VideoItem, VideoDecodeFormatType) selectVideoRendition(
+    List<VideoItem> items,
+    VideoDecodeFormatType seed,
+    List<VideoDecodeFormatType> preferCodecs,
+  ) {
+    assert(items.isNotEmpty, 'target quality has no renditions');
+
+    // The advertised format wins when it is really there.
+    for (final item in items) {
+      if (seed.codes.any(item.codecs!.startsWith)) {
+        return (item, seed);
+      }
+    }
+
+    // Otherwise take the best format the user prefers that actually exists.
+    int bestIndex = preferCodecs.length;
+    VideoItem? best;
+    for (final item in items) {
+      final c = item.codecs!;
+      for (int i = 0; i < bestIndex; i++) {
+        if (preferCodecs[i].codes.any(c.startsWith)) {
+          bestIndex = i;
+          best = item;
+          break;
+        }
+      }
+      if (bestIndex == 0) break;
+    }
+    if (best != null) {
+      return (best, preferCodecs[bestIndex]);
+    }
+
+    // Nothing matched a preference: keep the rendition, but at least report
+    // the format it really carries rather than a mismatched seed.
+    return (items.first, VideoDecodeFormatType.fromString(items.first.codecs!));
   }
 }

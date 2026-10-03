@@ -655,35 +655,15 @@ class VideoDetailController extends GetxController
   VideoItem findVideoByQa(int qa, {bool setCodecs = false}) {
     /// 根据currentVideoQa和currentDecodeFormats 重新设置videoUrl
     final videoList = data.dash!.video!.where((i) => i.id == qa).toList();
-
-    final currentCodes = currentDecodeFormats.codes;
-    VideoItem? bestVideo;
-    int bestIndex = preferCodecs.length;
-    for (final video in videoList) {
-      final c = video.codecs!;
-      if (currentCodes.any(c.startsWith)) {
-        return video;
-      }
-      for (int i = 0; i < bestIndex; i++) {
-        if (preferCodecs[i].codes.any(c.startsWith)) {
-          bestIndex = i;
-          bestVideo = video;
-          break;
-        }
-      }
-    }
-
+    final (video, format) = VideoUtils.selectVideoRendition(
+      videoList,
+      currentDecodeFormats,
+      preferCodecs,
+    );
     if (setCodecs) {
-      if (bestIndex < preferCodecs.length) {
-        currentDecodeFormats = preferCodecs[bestIndex];
-      } else {
-        currentDecodeFormats = VideoDecodeFormatType.fromString(
-          videoList.first.codecs!,
-        );
-      }
+      currentDecodeFormats = format;
     }
-
-    return bestVideo ?? videoList.first;
+    return video;
   }
 
   /// 更新画质、音质
@@ -1147,16 +1127,14 @@ class VideoDetailController extends GetxController
         preferCodecs,
       );
 
-      /// 取出符合当前画质的videoList
-      final videosList = data.dash!.video!
-          .where((e) => e.quality.code == targetVideoQa)
-          .toList();
-
       /// 取出符合当前解码格式的videoItem
-      firstVideo = videosList.firstWhere(
-        (e) => currentDecodeFormats.codes.any(e.codecs!.startsWith),
-        orElse: () => videosList.first,
-      );
+      ///
+      /// Route the first open through findVideoByQa so it selects exactly what
+      /// a reload (quality change, CDN rotation) would. The two used to
+      /// disagree: this path fell back to `videosList.first`, which could be a
+      /// codec the device cannot decode, so playback started audio-only until
+      /// a reload happened to pick a good rendition.
+      firstVideo = findVideoByQa(targetVideoQa, setCodecs: true);
       _setVideoHeight();
 
       videoUrl = VideoUtils.getCdnUrl(firstVideo.playUrls);
